@@ -1,0 +1,33 @@
+# Compiler files
+cache/
+out/
+
+# Ignores development broadcast logs
+!/broadcast
+/broadcast/*/31337/
+/broadcast/**/dry-run/
+
+# Docs
+docs/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Node modules
+node_modules/
+
+# Mac OS
+.DS_Store
+
+# Foundry coverage files
+lcov.info
+coverage/
+
+# IDE files
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.sublime-*
