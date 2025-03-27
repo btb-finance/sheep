@@ -11,6 +11,11 @@ The Sheep Ecosystem consists of several key components:
 - **Wolf**: A contract that interacts with the SHEEP token
 - **SheepPool**: The BTB staking implementation that allows users to stake SHEEP tokens with a two-dog rotation system
 
+## Latest Updates
+* Added improved contract testing
+* Enhanced security features
+* Optimized gas usage
+
 ## Repository Structure
 
 ```
