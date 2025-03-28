@@ -632,6 +632,7 @@ contract SHEEP is ERC20Sheep, Ownable2Step {
 
     uint256 public constant ONE_WEEK = 604800; //this is the delay on retrieving the LPs
     uint256 public constant mintPrice = 1; // 1 means 1 wGAS token for 1 SHEEP
+    uint256 public constant tokenMultiplier = 10000000000; // 10 billion multiplier - 0.0000001 ETH gives 1,000,000,000 tokens
     uint256 public constant teamCut = 50; // 50 = 5%
     uint256 public constant maxPreMint = 2_000_000e18;
     address public immutable wGasToken; //wrapped gas token of network
@@ -658,7 +659,7 @@ contract SHEEP is ERC20Sheep, Ownable2Step {
     function _mintForFee(uint256 _amount) private {
         require(pastured,"You are to late");
         require(saleStarted,"Sheep nor ready yet");
-        require(preMinted + _amount <= maxPreMint,"No more sheep in the market");
+        require(preMinted + (_amount * tokenMultiplier) <= maxPreMint,"No more sheep in the market");
 
         uint mintFee = _amount * mintPrice;
         uint teamFee = mintFee * teamCut / 1000;
@@ -666,12 +667,12 @@ contract SHEEP is ERC20Sheep, Ownable2Step {
         IERC20(wGasToken).transfer(POL, mintFee- teamFee);
         IERC20(wGasToken).transfer(owner(), teamFee);
 
-        uint polToMint = _amount - (teamCut * _amount / 1000);
+        uint polToMint = (_amount * tokenMultiplier) - (teamCut * (_amount * tokenMultiplier) / 1000);
 
-        preMinted += _amount;
+        preMinted += (_amount * tokenMultiplier);
 
-        _mint(msg.sender, _amount);
-        _mint(POL,polToMint);
+        _mint(msg.sender, _amount * tokenMultiplier);
+        _mint(POL, polToMint);
     }
 
     ///////////////////////////////////////
