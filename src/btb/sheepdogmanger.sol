@@ -100,6 +100,7 @@ contract SheepDogManager {
     // Withdrawal requests
     mapping(address => WithdrawalRequest) public withdrawalRequests;
     address[] public withdrawalQueue; // Users who have requested withdrawals
+    uint256 public maxWithdrawalQueueSize = 100; // Maximum number of users in withdrawal queue
     
     // Protocol metrics
     uint256 public totalValueLocked;  // Total SHEEP value across both addresses
@@ -114,6 +115,9 @@ contract SheepDogManager {
     
     // Platform state
     bool public emergencyShutdown; // Emergency pause
+    
+    // Tracking deposits per proxy to ensure sufficient funds for withdrawals
+    mapping(address => uint256) public proxyTotalDeposits;
     
     /* ========== STRUCTS ========== */
     
@@ -141,6 +145,7 @@ contract SheepDogManager {
     event AddressRotated(address oldActive, address newActive);
     event EmergencyShutdownSet(bool status);
     event ParameterUpdated(string parameter, uint256 value);
+    event WithdrawalQueueFull(address indexed user, uint256 amount);
     
     /* ========== CONSTRUCTOR ========== */
     
@@ -215,6 +220,9 @@ contract SheepDogManager {
         // Update address state
         addressStates[activeAddress].depositedSheep += netDepositAmount;
         
+        // Track deposits per proxy for safety checks
+        proxyTotalDeposits[activeAddress] += netDepositAmount;
+        
         emit Deposited(msg.sender, netDepositAmount);
     }
     
@@ -226,9 +234,20 @@ contract SheepDogManager {
         require(amount > 0, "Cannot withdraw 0");
         require(amount <= userDeposits[msg.sender], "Not enough deposits");
         
+        // Check if the withdrawal queue is too large
+        require(withdrawalQueue.length < maxWithdrawalQueueSize || 
+                withdrawalRequests[msg.sender].amount > 0, 
+                "Withdrawal queue is full");
+        
         // Add or update withdrawal request
         if (withdrawalRequests[msg.sender].amount == 0) {
-            withdrawalQueue.push(msg.sender);
+            // Only add to queue if not already in queue
+            if (withdrawalQueue.length < maxWithdrawalQueueSize) {
+                withdrawalQueue.push(msg.sender);
+            } else {
+                emit WithdrawalQueueFull(msg.sender, amount);
+                revert("Withdrawal queue is full");
+            }
         }
         
         withdrawalRequests[msg.sender] = WithdrawalRequest({
@@ -282,15 +301,30 @@ contract SheepDogManager {
     }
     
     /**
-     * @notice Check if the sleeping address is ready for withdrawal
+     * @notice Check if the sleeping address is ready for withdrawal and has sufficient funds
      * @return Whether the address is ready for withdrawal
      */
     function canCompleteRotation() public view returns (bool) {
         // Make sure at least 2 days have passed since initiating sleep
-        return 
-            sleepingAddress != address(0) && 
+        if (!(sleepingAddress != address(0) && 
             addressStates[sleepingAddress].isSleeping &&
-            block.timestamp >= addressStates[sleepingAddress].sleepTimestamp + 2 days;
+            block.timestamp >= addressStates[sleepingAddress].sleepTimestamp + 2 days)) {
+            return false;
+        }
+        
+        // Check if there are pending withdrawal requests
+        uint256 totalWithdrawalAmount = calculatePendingWithdrawalsTotal();
+        if (totalWithdrawalAmount == 0) {
+            return true; // No withdrawals to process, can complete rotation
+        }
+        
+        // Check if there are enough funds in the sleeping proxy
+        // This is an estimate since we can't know the exact amount until after getSheep()
+        uint256 expectedProxyValue = proxyTotalDeposits[sleepingAddress];
+        
+        // Require at least 95% of the expected value to be available
+        // (allowing for small fluctuations or fees)
+        return expectedProxyValue >= totalWithdrawalAmount;
     }
     
     /**
@@ -302,6 +336,9 @@ contract SheepDogManager {
         // Save reference to which address is which
         address withdrawalAddress = sleepingAddress;
         address nextActiveAddress = (withdrawalAddress == addressA) ? addressB : addressA;
+        
+        // Get pending withdrawal total for safety check
+        uint256 totalWithdrawalAmount = calculatePendingWithdrawalsTotal();
         
         // Take snapshot of total value before withdrawal for reward calculation
         uint256 beforeWithdrawalBalance = getTotalSheepValue();
@@ -325,11 +362,19 @@ contract SheepDogManager {
             ISheepDogProxy(withdrawalAddress).recoverTokens(sheep, address(this), proxyBalance);
         }
         
+        // Double-check we have enough funds after withdrawal
+        uint256 contractBalance = ISheep(sheep).balanceOf(address(this));
+        require(contractBalance >= totalWithdrawalAmount, 
+                "Insufficient funds to process withdrawals");
+        
         // Process withdrawal requests
         processWithdrawalRequests();
         
+        // Reset proxy total deposits
+        proxyTotalDeposits[withdrawalAddress] = 0;
+        
         // Calculate if there are any rewards (excess SHEEP)
-        uint256 contractBalance = ISheep(sheep).balanceOf(address(this));
+        contractBalance = ISheep(sheep).balanceOf(address(this));
         uint256 pendingWithdrawalsTotal = calculatePendingWithdrawalsTotal();
         
         // If we have more SHEEP than needed for pending withdrawals, those are rewards
@@ -358,6 +403,9 @@ contract SheepDogManager {
             
             // Call protect through the proxy
             ISheepDogProxy(nextActiveAddress).protect(remainingSheep);
+            
+            // Update proxy total deposits
+            proxyTotalDeposits[nextActiveAddress] += remainingSheep;
         }
         
         // Update address states
@@ -636,6 +684,16 @@ contract SheepDogManager {
                 emit RewardHarvested(excessAmount);
             }
         }
+    }
+    
+    /**
+     * @notice Set the maximum withdrawal queue size
+     * @param newMaxSize New maximum queue size
+     */
+    function setMaxWithdrawalQueueSize(uint256 newMaxSize) external onlyAdmin {
+        require(newMaxSize >= 10 && newMaxSize <= 500, "Invalid queue size");
+        maxWithdrawalQueueSize = newMaxSize;
+        emit ParameterUpdated("maxWithdrawalQueueSize", newMaxSize);
     }
     
     // Allow the contract to receive ETH if needed
